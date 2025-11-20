@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
 from alpaca_trade_api.rest import REST, APIError
-from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
+ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+ALPACA_BASE_URL = os.getenv("APCA_API_BASE_URL")
 
 # Inicializa Flask
 app = Flask(__name__)
