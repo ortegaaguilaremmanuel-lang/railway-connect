@@ -5,9 +5,7 @@ import traceback
 
 app = Flask(__name__)
 
-# ============================
-#  CARGAR VARIABLES DE ENTORNO
-# ============================
+# Cargar claves desde variables de entorno de Render
 ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 ALPACA_BASE_URL = os.getenv("APCA_API_BASE_URL")
@@ -16,54 +14,40 @@ print("🔑 Claves cargadas correctamente")
 print("API KEY:", ALPACA_API_KEY)
 print("BASE URL:", ALPACA_BASE_URL)
 
-# ============================
-#  INICIALIZAR API ALPACA
-# ============================
-try:
-    api = tradeapi.REST(
-        ALPACA_API_KEY,
-        ALPACA_SECRET_KEY,
-        ALPACA_BASE_URL,
-        api_version='v2'
-    )
-    print("🚀 API conectada con éxito")
-except Exception as e:
-    print("❌ ERROR al conectar Alpaca:")
-    print(str(e))
-    traceback.print_exc()
+# Inicializar API de Alpaca
+api = tradeapi.REST(
+    ALPACA_API_KEY,
+    ALPACA_SECRET_KEY,
+    ALPACA_BASE_URL,
+    api_version='v2'
+)
 
+print("🚀 API conectada con éxito")
 
-# ============================
-#       ENDPOINT WEBHOOK
-# ============================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    print("📩 Webhook recibido")
-
     try:
+        print("\n📩 Webhook recibido")
+
         data = request.get_json()
         print("➡️ JSON recibido:", data)
 
         if not data:
-            print("❌ JSON inválido")
+            print("❌ JSON inválido recibido")
             return jsonify({"error": "invalid json"}), 400
 
         symbol = data.get("symbol")
-        action = data.get("action")
-        qty = data.get("qty")
+        action = data.get("action").upper()
+        qty = int(data.get("qty"))
 
-        if not symbol or not action or not qty:
-            print("❌ Faltan datos")
-            return jsonify({"error": "missing fields"}), 400
+        print(f"📌 Procesando operación: {action} {qty} {symbol}")
 
-        qty = int(qty)
-        action = action.upper()
+        # Obtener precio actual del activo
+        last_quote = api.get_latest_quote(symbol)
+        market_price = last_quote.ask_price
+        print(f"💲 Precio de mercado actual para {symbol}: {market_price}")
 
-        print(f"📌 Procesando {action} {qty} {symbol}")
-
-        # =====================
-        #   COMPRA
-        # =====================
+        # Ejecutar operación
         if action == "BUY":
             order = api.submit_order(
                 symbol=symbol,
@@ -72,26 +56,22 @@ def webhook():
                 type="market",
                 time_in_force="gtc"
             )
-            print("🟢 ORDEN DE COMPRA ENVIADA:", order.id)
-            return jsonify({"status": "BUY sent", "order_id": order.id})
+            print(f"🟢 ORDEN DE COMPRA enviada: {order.id}")
 
-        # =====================
-        #   VENTA
-        # =====================
         elif action == "SELL":
-            # Validar si tienes posiciones
+            # revisar posición actual
             try:
                 position = api.get_position(symbol)
-                available_qty = int(position.qty)
-                print(f"📊 Tienes {available_qty} acciones en posición")
+                current_qty = int(position.qty)
+                print(f"📊 Cantidad actual en cartera: {current_qty}")
 
-                if available_qty < qty:
-                    print("❌ No tienes suficientes acciones")
-                    return jsonify({"error": "not enough position"}), 400
+                if qty > current_qty:
+                    print("❌ ERROR: No tienes suficientes acciones para vender")
+                    return jsonify({"error": "not enough shares"}), 400
 
             except Exception:
-                print("❌ No tienes posiciones abiertas")
-                return jsonify({"error": "no open position"}), 400
+                print("❌ ERROR: No se encontró posición para vender")
+                return jsonify({"error": "no position"}), 400
 
             order = api.submit_order(
                 symbol=symbol,
@@ -100,30 +80,39 @@ def webhook():
                 type="market",
                 time_in_force="gtc"
             )
-            print("🔴 ORDEN DE VENTA ENVIADA:", order.id)
-            return jsonify({"status": "SELL sent", "order_id": order.id})
+            print(f"🔴 ORDEN DE VENTA enviada: {order.id}")
 
         else:
             print("❌ Acción inválida:", action)
             return jsonify({"error": "invalid action"}), 400
 
+        # Calcular ganancia/pérdida después de la operación
+        try:
+            position = api.get_position(symbol)
+            avg_entry = float(position.avg_entry_price)
+            current_price = float(position.current_price)
+            unrealized_pl = float(position.unrealized_pl)
+
+            print(f"📈 Precio promedio entrada: {avg_entry}")
+            print(f"📉 Precio actual: {current_price}")
+            print(f"💰 Ganancia/Pérdida: {unrealized_pl}")
+
+        except Exception:
+            print("⚠️ No es posible calcular P/L ahora (probable venta total).")
+
+        return jsonify({"status": "order sent"}), 200
+
     except Exception as e:
-        print("🔥 ERROR EN EL WEBHOOK")
+        print("🔥 ERROR EN EL SERVIDOR:")
         print(str(e))
         traceback.print_exc()
         return jsonify({"error": "internal server error"}), 500
 
 
-# ============================
-#       HOME PAGE
-# ============================
 @app.route("/", methods=["GET"])
 def home():
     return "🚀 Webhook Trading Bot ONLINE", 200
 
 
-# ============================
-#   INICIAR SERVIDOR
-# ============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
