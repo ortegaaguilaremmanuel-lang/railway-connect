@@ -5,7 +5,7 @@ import traceback
 
 app = Flask(__name__)
 
-# Cargar claves desde variables de entorno de Render
+# Cargar claves
 ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 ALPACA_BASE_URL = os.getenv("APCA_API_BASE_URL")
@@ -14,7 +14,7 @@ print("🔑 Claves cargadas correctamente")
 print("API KEY:", ALPACA_API_KEY)
 print("BASE URL:", ALPACA_BASE_URL)
 
-# Inicializar API de Alpaca
+# Inicializar API
 api = tradeapi.REST(
     ALPACA_API_KEY,
     ALPACA_SECRET_KEY,
@@ -33,22 +33,20 @@ def webhook():
         print("➡️ JSON recibido:", data)
 
         if not data:
-            print("❌ JSON inválido recibido")
             return jsonify({"error": "invalid json"}), 400
 
         symbol = data.get("symbol")
-        action = data.get("action").upper()
+        action = data.get("action")
         qty = int(data.get("qty"))
 
-        print(f"📌 Procesando operación: {action} {qty} {symbol}")
+        print(f"📌 Acción: {action}  | Cantidad: {qty} | Símbolo: {symbol}")
 
-        # Obtener precio actual del activo
-        last_quote = api.get_latest_quote(symbol)
-        market_price = last_quote.ask_price
-        print(f"💲 Precio de mercado actual para {symbol}: {market_price}")
+        # Obtener precio de mercado
+        last_price = api.get_latest_trade(symbol).price
+        print(f"💲 Precio actual de {symbol}: {last_price}")
 
-        # Ejecutar operación
-        if action == "BUY":
+        # Comprar
+        if action.upper() == "BUY":
             order = api.submit_order(
                 symbol=symbol,
                 qty=qty,
@@ -56,23 +54,21 @@ def webhook():
                 type="market",
                 time_in_force="gtc"
             )
-            print(f"🟢 ORDEN DE COMPRA enviada: {order.id}")
+            print("🟢 ORDEN DE COMPRA enviada:", order.id)
+            return jsonify({"order_id": order.id, "status": "BUY sent"}), 200
 
-        elif action == "SELL":
-            # revisar posición actual
+        # Vender
+        elif action.upper() == "SELL":
+            # Obtener posición
             try:
                 position = api.get_position(symbol)
-                current_qty = int(position.qty)
-                print(f"📊 Cantidad actual en cartera: {current_qty}")
-
-                if qty > current_qty:
-                    print("❌ ERROR: No tienes suficientes acciones para vender")
-                    return jsonify({"error": "not enough shares"}), 400
-
-            except Exception:
-                print("❌ ERROR: No se encontró posición para vender")
+                avg_price = float(position.avg_entry_price)
+                print(f"📘 Precio promedio de entrada: {avg_price}")
+            except:
+                print("⚠️ No tienes posición abierta en", symbol)
                 return jsonify({"error": "no position"}), 400
 
+            # Enviar venta
             order = api.submit_order(
                 symbol=symbol,
                 qty=qty,
@@ -80,31 +76,23 @@ def webhook():
                 type="market",
                 time_in_force="gtc"
             )
-            print(f"🔴 ORDEN DE VENTA enviada: {order.id}")
+            print("🔴 ORDEN DE VENTA enviada:", order.id)
+
+            # Calcular P/L
+            profit = round((last_price - avg_price) * qty, 2)
+            print(f"📈 Ganancia/Pérdida: {profit}")
+
+            return jsonify({
+                "order_id": order.id,
+                "status": "SELL sent",
+                "profit": profit
+            }), 200
 
         else:
-            print("❌ Acción inválida:", action)
             return jsonify({"error": "invalid action"}), 400
 
-        # Calcular ganancia/pérdida después de la operación
-        try:
-            position = api.get_position(symbol)
-            avg_entry = float(position.avg_entry_price)
-            current_price = float(position.current_price)
-            unrealized_pl = float(position.unrealized_pl)
-
-            print(f"📈 Precio promedio entrada: {avg_entry}")
-            print(f"📉 Precio actual: {current_price}")
-            print(f"💰 Ganancia/Pérdida: {unrealized_pl}")
-
-        except Exception:
-            print("⚠️ No es posible calcular P/L ahora (probable venta total).")
-
-        return jsonify({"status": "order sent"}), 200
-
     except Exception as e:
-        print("🔥 ERROR EN EL SERVIDOR:")
-        print(str(e))
+        print("🔥 ERROR:", e)
         traceback.print_exc()
         return jsonify({"error": "internal server error"}), 500
 
